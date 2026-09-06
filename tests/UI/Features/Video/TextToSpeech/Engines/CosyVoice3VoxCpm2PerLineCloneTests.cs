@@ -44,6 +44,19 @@ public class CosyVoice3VoxCpm2PerLineCloneTests
     }
 
     [Fact]
+    public void CosyVoice3_PerLineClone_WithoutATranscript_SendsTheClipAlone()
+    {
+        // No original-language subtitle loaded means nobody knows what the clip says. The clip
+        // still travels; ref_text is left out and the backend (v0.8.32+) transcribes the clip
+        // itself before cloning from it. A blank or the line's own text must never be sent in
+        // its place - a transcript that is not what the clip says wrecks the decode (#14480).
+        var payload = CosyVoice3CrispAsr.BuildSpeakPayload("hello", 1.0, "se-per-line-line-0007.wav", null);
+
+        Assert.Equal("se-per-line-line-0007.wav", payload["voice"]);
+        Assert.False(payload.ContainsKey("ref_text"));
+    }
+
+    [Fact]
     public void VoxCpm2_OrdinaryVoice_SendsNoVoiceField()
     {
         var payload = VoxCPM2CrispAsr.BuildSpeakPayload("hello", 1.0, null);

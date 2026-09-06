@@ -460,9 +460,12 @@ public class CosyVoice3CrispAsr : ITtsEngine, IPerLineCloneEngine
     /// <summary>
     /// <see cref="IPerLineCloneEngine"/>: the clip is staged into the voices folder, which is the
     /// server's working directory, so its bare file name is what <see cref="Speak"/> sends as the
-    /// request's <c>voice</c>. The talker is conditioned on the (transcript, speech) pair, so a
-    /// clip without a usable transcript beside it is not a reference at all - null, and that line
-    /// falls back to an ordinary voice rather than failing the run.
+    /// request's <c>voice</c>. The talker is conditioned on the (transcript, speech) pair, but a
+    /// clip with no transcript beside it (no original-language subtitle loaded, so what the video
+    /// says is unknown) is still a usable reference: the request then carries no <c>ref_text</c>,
+    /// and the crispasr cosyvoice3 backend (v0.8.32) transcribes the clip itself with whisper
+    /// before cloning from it (upstream #334, cached beside the clip). Only a clip that cannot be
+    /// staged at all is null, and that line falls back to an ordinary voice.
     /// </summary>
     public Voice? MakePerLineCloneVoice(string clipFileName, string voiceName)
     {
@@ -475,8 +478,7 @@ public class CosyVoice3CrispAsr : ITtsEngine, IPerLineCloneEngine
         var refText = TryReadRefText(staged);
         if (string.IsNullOrWhiteSpace(refText))
         {
-            Se.WriteToolsLog($"CosyVoice3 (CrispASR): no usable transcript beside '{clipFileName}' - not cloning this line");
-            return null;
+            Se.WriteToolsLog($"CosyVoice3 (CrispASR): no transcript beside '{clipFileName}' - the server transcribes the clip itself");
         }
 
         return new Voice(new CosyVoice3Voice(voiceName, staged, refText));
@@ -569,7 +571,12 @@ public class CosyVoice3CrispAsr : ITtsEngine, IPerLineCloneEngine
         }
 
         var isClone = string.IsNullOrEmpty(cosyVoice.Preset);
-        if (isClone && string.IsNullOrEmpty(cosyVoice.RefText))
+        // A per-line clone's reference is sent per request, so the server is keyed on the model
+        // only for those; an ordinary voice keeps the startup flags and their restart-on-change.
+        var isPerLineClone = isClone && PerLineReferenceStaging.IsStaged(cosyVoice.FilePath);
+        // An imported voice without a transcript is asked for one at import time; a per-line clip
+        // has nobody to ask, and the server transcribes it itself - see MakePerLineCloneVoice.
+        if (isClone && !isPerLineClone && string.IsNullOrEmpty(cosyVoice.RefText))
         {
             var error = "CosyVoice3 (CrispASR) zero-shot cloning requires a transcription. "
                 + $"Add a .txt sidecar next to '{Path.GetFileName(cosyVoice.FilePath)}' with the "
@@ -579,9 +586,6 @@ public class CosyVoice3CrispAsr : ITtsEngine, IPerLineCloneEngine
         }
 
         var modelKey = ResolveModelKey(model);
-        // A per-line clone's reference is sent per request, so the server is keyed on the model
-        // only for those; an ordinary voice keeps the startup flags and their restart-on-change.
-        var isPerLineClone = isClone && PerLineReferenceStaging.IsStaged(cosyVoice.FilePath);
         await EnsureServerRunningAsync(modelKey, voiceArg, cosyVoice.RefText, isPerLineClone, cancellationToken);
 
         var outputFileName = Path.Combine(TtsOutputFolder.Resolve(outputFolder, GetSetFolder), Guid.NewGuid() + ".wav");
