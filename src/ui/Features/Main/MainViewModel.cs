@@ -596,7 +596,6 @@ public partial class MainViewModel :
 
     VideoPlayerUndockedViewModel? _videoPlayerUndockedViewModel;
     AudioVisualizerUndockedViewModel? _audioVisualizerUndockedViewModel;
-    bool _suppressUndockedTopmost;
     bool _foregroundBelongsToMainWindow;
     bool _undockedWindowPointerPressed;
     FindViewModel? _findViewModel;
@@ -8986,7 +8985,7 @@ public partial class MainViewModel :
                 // SE loses focus to another app. Mirrors the Find/Replace helper from #11243.
                 // The two undocked windows are still independent in Alt+Tab — KeepTopmost… is
                 // just a Z-order knob, not an ownership change.
-                WindowService.KeepTopmostWhileOwnerActive(window, Window!, () => _suppressUndockedTopmost);
+                WindowService.KeepTopmostWhileOwnerActive(window, Window!, () => WindowService.IsUndockedTopmostSuspended);
                 WatchUndockedForegroundSteal(window);
             });
 
@@ -8995,7 +8994,7 @@ public partial class MainViewModel :
                 _audioVisualizerUndockedViewModel = vm;
                 vm.Initialize(AudioVisualizer, this);
                 ReloadAudioVisualizer();
-                WindowService.KeepTopmostWhileOwnerActive(window, Window!, () => _suppressUndockedTopmost);
+                WindowService.KeepTopmostWhileOwnerActive(window, Window!, () => WindowService.IsUndockedTopmostSuspended);
                 WatchUndockedForegroundSteal(window);
             });
 
@@ -9244,14 +9243,14 @@ public partial class MainViewModel :
     /// </summary>
     internal void SetUndockedWindowsTopmost(bool topmost)
     {
-        // Remembered (and consulted by the KeepTopmostWhileOwnerActive registrations) so the
-        // helper's activation handler cannot re-assert Topmost while a menu or dialog is still
-        // open: opening a cascaded submenu (or a modal dialog) churns window activation, and the
-        // re-asserted Topmost put the tool windows back over the popup (#13187 follow-up) - and
-        // on Windows the SetWindowPos churn could steal OS activation from a just-opened modal
-        // dialog, leaving it drawn on top but inactive (#13325).
-        _suppressUndockedTopmost = !topmost;
-
+        // The KeepTopmostWhileOwnerActive registrations consult WindowService.IsUndockedTopmostSuspended
+        // live, so the helper's activation handler cannot re-assert Topmost while a menu or dialog
+        // is still open: opening a cascaded submenu (or a modal dialog) churns window activation,
+        // and the re-asserted Topmost put the tool windows back over the popup (#13187 follow-up) -
+        // and on Windows the SetWindowPos churn could steal OS activation from a just-opened modal
+        // dialog, leaving it drawn on top but inactive (#13325). Asking live rather than keeping a
+        // flag here is also what lets a leaked suspension heal instead of keeping the tool windows
+        // down for the session (#14622).
         foreach (var undockedWindow in new[] { _videoPlayerUndockedViewModel?.Window, _audioVisualizerUndockedViewModel?.Window })
         {
             if (undockedWindow != null)

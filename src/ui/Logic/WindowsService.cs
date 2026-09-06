@@ -383,12 +383,19 @@ namespace Nikse.SubtitleEdit.Logic
         // would be covered. MainViewModel registers the setter; the count makes nested
         // suspensions safe (menu -> dialog -> message box).
         private static Action<bool>? _setUndockedWindowsTopmost;
-        private static int _undockedTopmostSuspendCount;
+        private static readonly List<UndockedTopmostSuspension> _undockedTopmostSuspensions = new();
+        private static bool _undockedTopmostSuppressed;
+
+        // How long a suspension may report "owner not open" before it counts as leaked. A flyout
+        // takes its suspension at Opening, before IsOpen flips; a stalled UI thread can stretch
+        // that gap, and treating it as a leak too early would put the tool windows back over the
+        // popup it was taken for. Nothing legitimately stays in that state for this long.
+        private const long UndockedTopmostLeakGraceMs = 5000;
 
         /// <summary>
         /// Registers the callback that applies (true) or suppresses (false) the undocked tool
         /// windows' topmost state. Registered by MainViewModel; consulted by
-        /// <see cref="SuspendUndockedTopmost"/>.
+        /// <see cref="SuspendUndockedTopmost()"/>.
         /// </summary>
         public static void RegisterUndockedTopmostSetter(Action<bool>? setTopmost)
         {
@@ -401,26 +408,127 @@ namespace Nikse.SubtitleEdit.Logic
         /// </summary>
         internal static void ResetUndockedTopmostSuspensionsForTests()
         {
-            _undockedTopmostSuspendCount = 0;
+            _undockedTopmostSuspensions.Clear();
+            _undockedTopmostSuppressed = false;
+        }
+
+        /// <summary>
+        /// True while something that must not be covered by the undocked tool windows is open.
+        /// This is the live answer, not a remembered flag: reading it drops any suspension whose
+        /// owner has closed without releasing it (see <see cref="ReconcileUndockedTopmostSuspensions"/>),
+        /// so a leaked suspension can never keep the tool windows down for the rest of the session.
+        /// </summary>
+        public static bool IsUndockedTopmostSuspended
+        {
+            get
+            {
+                ReconcileUndockedTopmostSuspensions();
+                return _undockedTopmostSuppressed;
+            }
         }
 
         /// <summary>
         /// Drops the undocked tool windows' topmost state until the returned token is disposed.
-        /// Re-entrant: the state is restored when the last outstanding token is disposed.
+        /// Re-entrant: the state is restored when the last outstanding token is disposed. For a
+        /// suspension whose owner can be asked whether it is still open, prefer
+        /// <see cref="SuspendUndockedTopmost(Func{bool}, string)"/>.
         /// </summary>
         public static IDisposable SuspendUndockedTopmost()
         {
-            if (++_undockedTopmostSuspendCount == 1)
+            return SuspendUndockedTopmost(null, "modal dialog");
+        }
+
+        /// <summary>
+        /// Same as <see cref="SuspendUndockedTopmost()"/>, with a liveness check. A token whose
+        /// <paramref name="isStillOpen"/> reports false after its owner has been seen open (or
+        /// for longer than any open takes) is treated as leaked the next time the suspensions
+        /// are consulted: it is released, and the leak is logged with the stack that took it.
+        /// </summary>
+        /// <param name="isStillOpen">Whether the menu, flyout, or dialog the token was taken for is still open.</param>
+        /// <param name="origin">What took the suspension - named in the leak log entry.</param>
+        public static IDisposable SuspendUndockedTopmost(Func<bool>? isStillOpen, string origin)
+        {
+            var suspension = new UndockedTopmostSuspension(isStillOpen, origin);
+            _undockedTopmostSuspensions.Add(suspension);
+            ReconcileUndockedTopmostSuspensions();
+            return suspension;
+        }
+
+        /// <summary>
+        /// Brings the tool windows' topmost state in line with the suspensions that are actually
+        /// outstanding. The suspension used to be a bare count, and a single token that never got
+        /// disposed - an Opened without its Closed, a flyout torn down under its popup - kept the
+        /// undocked audio visualizer behind the main window until SE was restarted, with nothing
+        /// left in the log to say what had taken it (#14622). Now every owner that can be asked
+        /// is asked, a token whose owner is gone is dropped and logged, and the state is
+        /// re-derived from what remains.
+        /// </summary>
+        private static void ReconcileUndockedTopmostSuspensions()
+        {
+            for (var i = _undockedTopmostSuspensions.Count - 1; i >= 0; i--)
             {
-                _setUndockedWindowsTopmost?.Invoke(false);
+                var suspension = _undockedTopmostSuspensions[i];
+                if (!suspension.IsLeaked())
+                {
+                    continue;
+                }
+
+                _undockedTopmostSuspensions.RemoveAt(i);
+                Se.LogError(
+                    $"Undocked topmost suspension leaked: the {suspension.Origin} that took it is no longer open " +
+                    $"but never released it - released now. Taken at:{Environment.NewLine}{suspension.TakenAt}");
             }
 
-            return new UndockedTopmostSuspension();
+            var suppress = _undockedTopmostSuspensions.Count > 0;
+            if (suppress == _undockedTopmostSuppressed)
+            {
+                return;
+            }
+
+            _undockedTopmostSuppressed = suppress;
+            _setUndockedWindowsTopmost?.Invoke(!suppress);
         }
 
         private sealed class UndockedTopmostSuspension : IDisposable
         {
+            private readonly Func<bool>? _isStillOpen;
+            private readonly long _takenAtTick = Environment.TickCount64;
+            private bool _seenOpen;
             private bool _disposed;
+
+            public UndockedTopmostSuspension(Func<bool>? isStillOpen, string origin)
+            {
+                _isStillOpen = isStillOpen;
+                Origin = origin;
+                TakenAt = Environment.StackTrace;
+            }
+
+            public string Origin { get; }
+
+            public string TakenAt { get; }
+
+            /// <summary>
+            /// True when the owner is no longer open but the token was never disposed. An owner
+            /// legitimately reports "not open" right after taking the suspension (a flyout takes
+            /// it at Opening, before IsOpen flips), so that only counts once the owner has been
+            /// seen open, or after a grace period long enough for any open to have gone through.
+            /// A token without a liveness check is never leaked by this rule.
+            /// </summary>
+            public bool IsLeaked()
+            {
+                if (_isStillOpen == null)
+                {
+                    return false;
+                }
+
+                if (_isStillOpen())
+                {
+                    _seenOpen = true;
+                    return false;
+                }
+
+                return _seenOpen || Environment.TickCount64 - _takenAtTick > UndockedTopmostLeakGraceMs;
+            }
 
             public void Dispose()
             {
@@ -430,10 +538,8 @@ namespace Nikse.SubtitleEdit.Logic
                 }
 
                 _disposed = true;
-                if (--_undockedTopmostSuspendCount == 0)
-                {
-                    _setUndockedWindowsTopmost?.Invoke(true);
-                }
+                _undockedTopmostSuspensions.Remove(this);
+                ReconcileUndockedTopmostSuspensions();
             }
         }
 
@@ -455,7 +561,7 @@ namespace Nikse.SubtitleEdit.Logic
             IDisposable? suspension = null;
             flyout.Opening += (_, _) =>
             {
-                suspension ??= SuspendUndockedTopmost();
+                suspension ??= SuspendUndockedTopmost(() => flyout.IsOpen, "flyout");
 
                 // A subclass can cancel the open in OnOpening after the event has been raised;
                 // Closed then never fires and the suspension would leak, leaving the tool
@@ -485,7 +591,7 @@ namespace Nikse.SubtitleEdit.Logic
         public static void SuspendUndockedTopmostWhileOpen(MenuBase menu)
         {
             IDisposable? suspension = null;
-            menu.Opened += (_, _) => suspension ??= SuspendUndockedTopmost();
+            menu.Opened += (_, _) => suspension ??= SuspendUndockedTopmost(() => menu.IsOpen, "main menu");
             menu.Closed += (_, _) =>
             {
                 suspension?.Dispose();
@@ -1103,10 +1209,40 @@ namespace Nikse.SubtitleEdit.Logic
         internal static void SetTopmost(Window window, bool topmost, Window? owner)
         {
             window.Topmost = topmost;
-            if (!topmost)
+            if (topmost)
+            {
+                EnsureOsTopmost(window);
+            }
+            else
             {
                 KeepBelowForeignForegroundWindow(window, owner ?? window);
             }
+        }
+
+        /// <summary>
+        /// Avalonia's Win32 backend only issues SetWindowPos(HWND_TOPMOST) when its own cached
+        /// Topmost value changes, so a window whose WS_EX_TOPMOST the OS has dropped behind
+        /// Avalonia's back stays non-topmost no matter how often Topmost=true is re-asserted. If
+        /// the OS disagrees with the property after asserting it, force the round trip - and log
+        /// it, since that desync is one of the two states that leave an undocked tool window
+        /// permanently behind the main window (#14622).
+        /// </summary>
+        private static void EnsureOsTopmost(Window window)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return;
+            }
+
+            var handle = window.TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+            if (handle == IntPtr.Zero || (GetWindowLongW(handle, GwlExStyle) & WsExTopmost) != 0)
+            {
+                return;
+            }
+
+            Se.LogError($"Window '{window.Title}' reports Topmost but is not WS_EX_TOPMOST - re-asserting.");
+            window.Topmost = false;
+            window.Topmost = true;
         }
 
         private static void KeepBelowForeignForegroundWindow(Window window, Window reference)
