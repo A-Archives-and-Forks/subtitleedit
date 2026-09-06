@@ -14290,31 +14290,49 @@ public partial class MainViewModel :
             return;
         }
 
-        // Determine direction from the first selected line: if any of its lines
-        // already start with a dash, toggle OFF for every selected line; else
-        // toggle ON. Matches SE 4 behaviour so a single hotkey flips the whole
-        // selection in one direction.
-        var firstLines = selectedItems[0].Text?.SplitToLines() ?? new List<string>();
-        var hasStartDash = firstLines.Any(l =>
-            HtmlUtil.RemoveHtmlTags(l, true).TrimStart().StartsWith('-'));
+        // Like SE 4: when one of the edit text boxes has focus only that column
+        // is toggled; with focus elsewhere (e.g. the grid) both columns follow.
+        var originalFocused = EditTextBoxOriginal.IsFocused;
+        var textFocused = EditTextBox.IsFocused;
+        var doText = !originalFocused;
+        var doOriginal = CanEditOriginal && !textFocused;
+        if (originalFocused && !CanEditOriginal)
+        {
+            doText = true;
+        }
 
         var dialogStyle = Enum.TryParse<DialogType>(Se.Settings.General.DialogStyle, out var ds)
             ? ds
             : DialogType.DashBothLinesWithSpace;
         var dialogHelper = new DialogSplitMerge { DialogStyle = dialogStyle, SkipLineEndingCheck = true };
 
-        foreach (var item in selectedItems)
+        // Each column decides its own direction (from the first selected line
+        // with text): if any of its lines already start with a dash, toggle OFF
+        // for every selected line; else toggle ON. Deciding once per column keeps
+        // a single hotkey flipping the whole selection in one direction and
+        // stops a dash-free column from forcing endless "add" on the other.
+        if (doText)
         {
-            item.Text = hasStartDash
-                ? RemoveDialogDashes(item.Text)
-                : AddDialogDashes(item.Text, dialogHelper);
-
-            // Keep the translation/original column in sync so the two views
-            // don't drift apart — matches what MergeManager.MergeSelectedLinesAsDialog
-            // already does for OriginalText.
-            if (CanEditOriginal && !string.IsNullOrEmpty(item.OriginalText))
+            var remove = HasStartDash(selectedItems.Select(i => i.Text));
+            foreach (var item in selectedItems)
             {
-                item.OriginalText = hasStartDash
+                item.Text = remove
+                    ? RemoveDialogDashes(item.Text)
+                    : AddDialogDashes(item.Text, dialogHelper);
+            }
+        }
+
+        if (doOriginal)
+        {
+            var remove = HasStartDash(selectedItems.Select(i => i.OriginalText));
+            foreach (var item in selectedItems)
+            {
+                if (string.IsNullOrEmpty(item.OriginalText))
+                {
+                    continue;
+                }
+
+                item.OriginalText = remove
                     ? RemoveDialogDashes(item.OriginalText)
                     : AddDialogDashes(item.OriginalText, dialogHelper);
             }
@@ -14323,7 +14341,20 @@ public partial class MainViewModel :
         _updateAudioVisualizer = true;
     }
 
-    private static string AddDialogDashes(string text, DialogSplitMerge dialogHelper)
+    private static bool HasStartDash(IEnumerable<string?> texts)
+    {
+        var first = texts.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
+        if (first == null)
+        {
+            return false;
+        }
+
+        return first.SplitToLines().Any(l =>
+            HtmlUtil.RemoveHtmlTags(l, true).TrimStart().StartsWith('-') ||
+            HtmlUtil.RemoveHtmlTags(l, true).TrimStart().StartsWith('‐'));
+    }
+
+    internal static string AddDialogDashes(string text, DialogSplitMerge dialogHelper)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -14341,13 +14372,16 @@ public partial class MainViewModel :
         {
             var pre = string.Empty;
             var s = Utilities.SplitStartTags(line, ref pre);
+            // Strip whatever dashes are already there so repeated presses (or a
+            // half-dashed paragraph) never stack up "- - - ".
+            s = StripLeadingDashes(s);
             sb.Append(pre).Append("- ").AppendLine(s);
         }
 
         return dialogHelper.FixDashesAndSpaces(sb.ToString().Trim());
     }
 
-    private static string RemoveDialogDashes(string text)
+    internal static string RemoveDialogDashes(string text)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -14360,10 +14394,22 @@ public partial class MainViewModel :
         {
             var pre = string.Empty;
             var s = Utilities.SplitStartTags(line, ref pre);
-            sb.Append(pre).AppendLine(s.TrimStart('-', '‐').TrimStart());
+            sb.Append(pre).AppendLine(StripLeadingDashes(s));
         }
 
         return sb.ToString().Trim();
+    }
+
+    /// <summary>Removes every leading dash (and the spaces between them) from a line.</summary>
+    private static string StripLeadingDashes(string s)
+    {
+        s = s.TrimStart();
+        while (s.Length > 0 && (s[0] == '-' || s[0] == '‐' || s[0] == '–' || s[0] == '—'))
+        {
+            s = s.Substring(1).TrimStart();
+        }
+
+        return s;
     }
 
     [RelayCommand]
