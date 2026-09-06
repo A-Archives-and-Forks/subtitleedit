@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -30,6 +30,7 @@ namespace Nikse.SubtitleEdit.Features.Video.TextToSpeech.AudioCppTtsSettings;
 /// </summary>
 public sealed record AudioCppTtsSettingsAdapter(
     string EngineName,
+    string FamilyName,
     string Description,
     string ModelKeyDefault,
     string ModelKeyAlt,
@@ -45,6 +46,7 @@ public static class AudioCppTtsSettingsAdapters
 {
     public static AudioCppTtsSettingsAdapter Higgs { get; } = new(
         EngineName: "Higgs Audio v3 (audio.cpp)",
+        FamilyName: HiggsTtsAudioCpp.FamilyName,
         Description: new HiggsTtsAudioCpp().Description,
         ModelKeyDefault: HiggsTtsAudioCpp.ModelKeyQ8_0,
         ModelKeyAlt: HiggsTtsAudioCpp.ModelKeyBf16,
@@ -58,6 +60,7 @@ public static class AudioCppTtsSettingsAdapters
 
     public static AudioCppTtsSettingsAdapter Fish { get; } = new(
         EngineName: "Fish Audio S2 Pro (audio.cpp)",
+        FamilyName: FishTtsAudioCpp.FamilyName,
         Description: new FishTtsAudioCpp().Description,
         ModelKeyDefault: FishTtsAudioCpp.ModelKeyQ8_0,
         ModelKeyAlt: FishTtsAudioCpp.ModelKeyBf16,
@@ -71,6 +74,7 @@ public static class AudioCppTtsSettingsAdapters
 
     public static AudioCppTtsSettingsAdapter FireRedTts3 { get; } = new(
         EngineName: "FireRedTTS3 (audio.cpp)",
+        FamilyName: FireRedTts3AudioCpp.FamilyName,
         Description: new FireRedTts3AudioCpp().Description,
         ModelKeyDefault: FireRedTts3AudioCpp.ModelKeyQ8_0,
         ModelKeyAlt: FireRedTts3AudioCpp.ModelKeyOrig,
@@ -142,8 +146,10 @@ public partial class AudioCppTtsSettingsViewModel : ObservableObject
             EngineBrush = Red();
             EngineDownloadButtonText = string.Format(Se.Language.General.DownloadX, "audio.cpp");
         }
-        else if (DownloadHashManager.GetSidecarStatus(Path.GetDirectoryName(exe) ?? string.Empty) == DownloadHashManager.UpdateStatus.UpdateAvailable)
+        else if (!AudioCppRuntime.SupportsFamily(Adapter.FamilyName)
+                 || DownloadHashManager.GetSidecarStatus(Path.GetDirectoryName(exe) ?? string.Empty) == DownloadHashManager.UpdateStatus.UpdateAvailable)
         {
+            // A build that predates this engine's family is flagged too, even without a sidecar.
             EngineLabel = string.Format(Se.Language.Video.TtsEngineUpdateAvailable, "audio.cpp" + backendSuffix);
             EngineBrush = Amber();
             EngineDownloadButtonText = string.Format(Se.Language.Video.TtsUpdateX, "audio.cpp");
@@ -206,7 +212,7 @@ public partial class AudioCppTtsSettingsViewModel : ObservableObject
             return;
         }
 
-        await TtsVoiceInstaller.EnsureAudioCppRuntime(Window, _windowService, forceRedownload: true, Adapter.EngineName);
+        await TtsVoiceInstaller.EnsureAudioCppRuntime(Window, _windowService, forceRedownload: true, Adapter.EngineName, Adapter.FamilyName);
         Refresh();
     }
 

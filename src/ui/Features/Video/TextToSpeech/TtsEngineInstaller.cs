@@ -403,7 +403,7 @@ public static class TtsEngineInstaller
                 }
             }
 
-            if (!await TtsVoiceInstaller.EnsureAudioCppRuntime(window, windowService, forceRedownload: false, "IndexTTS 2.5"))
+            if (!await TtsVoiceInstaller.EnsureAudioCppRuntime(window, windowService, forceRedownload: false, "IndexTTS 2.5", IndexTts25AudioCpp.FamilyName))
             {
                 return false;
             }
@@ -445,6 +445,7 @@ public static class TtsEngineInstaller
             return await EnsureAudioCppEngineWithLicense(
                 window, windowService, refreshVoices,
                 engineDisplayName: "Higgs Audio v3",
+                requiredFamily: HiggsTtsAudioCpp.FamilyName,
                 licenseDefinition: HiggsTtsAudioCpp.LicenseDefinition,
                 isLicenseAccepted: HiggsTtsAudioCpp.IsLicenseAccepted,
                 modelKey: HiggsTtsAudioCpp.ResolveModelKey(model),
@@ -457,6 +458,7 @@ public static class TtsEngineInstaller
             return await EnsureAudioCppEngineWithLicense(
                 window, windowService, refreshVoices,
                 engineDisplayName: "Fish Audio S2 Pro",
+                requiredFamily: FishTtsAudioCpp.FamilyName,
                 licenseDefinition: FishTtsAudioCpp.LicenseDefinition,
                 isLicenseAccepted: FishTtsAudioCpp.IsLicenseAccepted,
                 modelKey: FishTtsAudioCpp.ResolveModelKey(model),
@@ -470,6 +472,7 @@ public static class TtsEngineInstaller
             return await EnsureAudioCppEngineWithLicense(
                 window, windowService, refreshVoices,
                 engineDisplayName: "FireRedTTS3",
+                requiredFamily: FireRedTts3AudioCpp.FamilyName,
                 licenseDefinition: null,
                 isLicenseAccepted: () => true,
                 modelKey: FireRedTts3AudioCpp.ResolveModelKey(model),
@@ -1013,6 +1016,7 @@ public static class TtsEngineInstaller
         IWindowService windowService,
         Func<Task> refreshVoices,
         string engineDisplayName,
+        string requiredFamily,
         ModelLicenseDefinition? licenseDefinition,
         Func<bool> isLicenseAccepted,
         string modelKey,
@@ -1036,7 +1040,7 @@ public static class TtsEngineInstaller
             }
         }
 
-        if (!await TtsVoiceInstaller.EnsureAudioCppRuntime(window, windowService, forceRedownload: false, engineDisplayName))
+        if (!await TtsVoiceInstaller.EnsureAudioCppRuntime(window, windowService, forceRedownload: false, engineDisplayName, requiredFamily))
         {
             return false;
         }
