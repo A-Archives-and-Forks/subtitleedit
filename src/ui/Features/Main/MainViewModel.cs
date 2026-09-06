@@ -9484,7 +9484,13 @@ public partial class MainViewModel :
                 }
             }
 
-            _subtitleFileName = Path.ChangeExtension(_videoFileName ?? "transcription", SelectedSubtitleFormat.Extension);
+            // The placeholder name is derived from the video, so honor the "Save as: append
+            // language code" setting right away - the title then matches what "Save as..."
+            // (and batch mode's "Add language code to file name") would produce (issue #14613).
+            var baseName = _videoFileName ?? "transcription";
+            var nameWithoutExtension = Path.Combine(Path.GetDirectoryName(baseName) ?? string.Empty, Path.GetFileNameWithoutExtension(baseName));
+            nameWithoutExtension = AppendLanguageCodeToFileName(nameWithoutExtension, _subtitle);
+            _subtitleFileName = nameWithoutExtension + SelectedSubtitleFormat.Extension;
             _converted = true;
 
             SetSubtitles(_subtitle);
@@ -24603,51 +24609,7 @@ public partial class MainViewModel :
             }
         }
 
-        var language = LanguageAutoDetect.AutoDetectGoogleLanguageOrNull2(GetUpdateSubtitle());
-        if (!string.IsNullOrEmpty(language) && Se.Settings.General.SaveAsAppendLanguageCode != nameof(SaveAsLanguageAppendType.None))
-        {
-            var l = Iso639Dash2LanguageCode.List.FirstOrDefault(p => p.TwoLetterCode == language);
-            if (l != null)
-            {
-                if (newFileName.EndsWith("." + l.EnglishName, StringComparison.OrdinalIgnoreCase))
-                {
-                    newFileName = newFileName.Substring(0, newFileName.Length - (l.EnglishName.Length + 1));
-                }
-
-                if (newFileName.EndsWith("." + l.TwoLetterCode, StringComparison.OrdinalIgnoreCase))
-                {
-                    newFileName = newFileName.Substring(0, newFileName.Length - (l.TwoLetterCode.Length + 1));
-                }
-
-                if (newFileName.EndsWith("." + l.ThreeLetterCode, StringComparison.OrdinalIgnoreCase))
-                {
-                    newFileName = newFileName.Substring(0, newFileName.Length - (l.ThreeLetterCode.Length + 1));
-                }
-
-                if (l.BibliographicCode != l.ThreeLetterCode &&
-                    newFileName.EndsWith("." + l.BibliographicCode, StringComparison.OrdinalIgnoreCase))
-                {
-                    newFileName = newFileName.Substring(0, newFileName.Length - (l.BibliographicCode.Length + 1));
-                }
-
-                if (Se.Settings.General.SaveAsAppendLanguageCode == nameof(SaveAsLanguageAppendType.TwoLetterLanguageCode))
-                {
-                    newFileName += "." + l.TwoLetterCode;
-                }
-                else if (Se.Settings.General.SaveAsAppendLanguageCode == nameof(SaveAsLanguageAppendType.ThreeLEtterLanguageCode))
-                {
-                    newFileName += "." + l.ThreeLetterCode;
-                }
-                else if (Se.Settings.General.SaveAsAppendLanguageCode == nameof(SaveAsLanguageAppendType.ThreeLetterLanguageCodeBibliographic))
-                {
-                    newFileName += "." + l.BibliographicCode;
-                }
-                else if (Se.Settings.General.SaveAsAppendLanguageCode == nameof(SaveAsLanguageAppendType.FullLanguageName))
-                {
-                    newFileName += "." + l.EnglishName;
-                }
-            }
-        }
+        newFileName = AppendLanguageCodeToFileName(newFileName, GetUpdateSubtitle());
 
         newFileName = ApplyDefaultSaveLocation(newFileName);
 
@@ -30728,6 +30690,63 @@ public partial class MainViewModel :
         {
             _autoSaveInProgress = false;
         }
+    }
+
+    /// <summary>
+    /// Applies the "Save as: append language code" setting to an extension-less file name:
+    /// strips any language token already on it, then appends the configured form of the
+    /// subtitle's auto-detected language. Returns the name unchanged when the setting is off
+    /// or no language can be detected.
+    /// </summary>
+    private string AppendLanguageCodeToFileName(string newFileName, Subtitle subtitle)
+    {
+        var language = LanguageAutoDetect.AutoDetectGoogleLanguageOrNull2(subtitle);
+        if (!string.IsNullOrEmpty(language) && Se.Settings.General.SaveAsAppendLanguageCode != nameof(SaveAsLanguageAppendType.None))
+        {
+            var l = Iso639Dash2LanguageCode.List.FirstOrDefault(p => p.TwoLetterCode == language);
+            if (l != null)
+            {
+                if (newFileName.EndsWith("." + l.EnglishName, StringComparison.OrdinalIgnoreCase))
+                {
+                    newFileName = newFileName.Substring(0, newFileName.Length - (l.EnglishName.Length + 1));
+                }
+
+                if (newFileName.EndsWith("." + l.TwoLetterCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    newFileName = newFileName.Substring(0, newFileName.Length - (l.TwoLetterCode.Length + 1));
+                }
+
+                if (newFileName.EndsWith("." + l.ThreeLetterCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    newFileName = newFileName.Substring(0, newFileName.Length - (l.ThreeLetterCode.Length + 1));
+                }
+
+                if (l.BibliographicCode != l.ThreeLetterCode &&
+                    newFileName.EndsWith("." + l.BibliographicCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    newFileName = newFileName.Substring(0, newFileName.Length - (l.BibliographicCode.Length + 1));
+                }
+
+                if (Se.Settings.General.SaveAsAppendLanguageCode == nameof(SaveAsLanguageAppendType.TwoLetterLanguageCode))
+                {
+                    newFileName += "." + l.TwoLetterCode;
+                }
+                else if (Se.Settings.General.SaveAsAppendLanguageCode == nameof(SaveAsLanguageAppendType.ThreeLEtterLanguageCode))
+                {
+                    newFileName += "." + l.ThreeLetterCode;
+                }
+                else if (Se.Settings.General.SaveAsAppendLanguageCode == nameof(SaveAsLanguageAppendType.ThreeLetterLanguageCodeBibliographic))
+                {
+                    newFileName += "." + l.BibliographicCode;
+                }
+                else if (Se.Settings.General.SaveAsAppendLanguageCode == nameof(SaveAsLanguageAppendType.FullLanguageName))
+                {
+                    newFileName += "." + l.EnglishName;
+                }
+            }
+        }
+
+        return newFileName;
     }
 
     private void UpdateTitleStatus(int mainHash, int originalHash)
